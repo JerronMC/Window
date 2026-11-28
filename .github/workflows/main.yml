@@ -94,4 +94,7 @@ jobs:
       - name: Cleanup
         if: always()
         shell: pwsh
-        run: tailscale logout
+        run: |
+          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
+          if (Test-Path $ts) { & $ts logout }
+          exit 0
