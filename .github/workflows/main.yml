@@ -48,10 +48,18 @@ jobs:
         env:
           RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
-          if (-not $env:RDP_PASSWORD -or $env:RDP_PASSWORD.Length -lt 12) {
-            Write-Error "Add a repo secret RDP_PASSWORD (12+ chars). Passwords printed in logs are visible on public repos."
+          if (-not $env:RDP_PASSWORD) {
+            Write-Error "Add a repo secret RDP_PASSWORD."
             exit 1
           }
+
+          # Allow simple passwords (RDP is only reachable over your Tailscale network)
+          secedit /export /cfg C:\sec.cfg | Out-Null
+          (Get-Content C:\sec.cfg) `
+            -replace 'PasswordComplexity = 1','PasswordComplexity = 0' `
+            -replace 'MinimumPasswordLength = \d+','MinimumPasswordLength = 0' |
+            Set-Content C:\sec.cfg
+          secedit /configure /db C:\Windows\security\local.sdb /cfg C:\sec.cfg /areas SECURITYPOLICY | Out-Null
           Write-Output "::add-mask::$env:RDP_PASSWORD"
           $sec = ConvertTo-SecureString $env:RDP_PASSWORD -AsPlainText -Force
           New-LocalUser -Name "RDP" -Password $sec -AccountNeverExpires -PasswordNeverExpires | Out-Null
@@ -61,12 +69,15 @@ jobs:
       - name: Get Tailscale IP
         shell: pwsh
         run: |
+          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
+          if (-not (Test-Path $ts)) { $ts = (Get-Command tailscale -ErrorAction SilentlyContinue).Source }
+          Write-Host "Using: $ts"
           $ip = $null
-          for ($i = 0; $i -lt 12 -and -not $ip; $i++) {
-            $ip = (& tailscale ip -4 2>$null | Select-Object -First 1)
-            if (-not $ip) { Start-Sleep -Seconds 2 }
+          for ($i = 0; $i -lt 15 -and -not $ip; $i++) {
+            $ip = (& $ts ip -4 2>&1 | Select-Object -First 1)
+            if ($ip -notmatch '^\d+\.\d+\.\d+\.\d+$') { $ip = $null; Start-Sleep -Seconds 3 }
           }
-          if (-not $ip) { Write-Error "No Tailscale IP"; exit 1 }
+          if (-not $ip) { & $ts status; Write-Error "No Tailscale IP"; exit 1 }
           "TS_IP=$ip" >> $env:GITHUB_ENV
 
       - name: Keep session alive
